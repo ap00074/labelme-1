@@ -6,6 +6,17 @@ import os.path as osp
 import re
 import webbrowser
 
+import torch
+import torch.nn as nn
+import torchvision
+from torchvision import datasets, models, transforms
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+import io
+from PIL import Image
+
 import imgviz
 from qtpy import QtCore
 from qtpy.QtCore import Qt
@@ -254,6 +265,14 @@ class MainWindow(QtWidgets.QMainWindow):
             checked=self._config['store_data'],
         )
 
+        classification = action(
+            self.tr('Classify Rectangle Image'),
+            self.classification,
+            'objects',
+            self.tr('Start classifying images'),
+            enabled = True,
+        )
+
         close = action('&Close', self.closeFile, shortcuts['close'], 'close',
                        'Close current file')
 
@@ -429,7 +448,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Lavel list context menu.
         labelMenu = QtWidgets.QMenu()
-        utils.addActions(labelMenu, (edit, delete))
+        utils.addActions(labelMenu, (edit, classification, delete))
         self.labelList.setContextMenuPolicy(Qt.CustomContextMenu)
         self.labelList.customContextMenuRequested.connect(
             self.popLabelListMenu)
@@ -445,6 +464,7 @@ class MainWindow(QtWidgets.QMainWindow):
             delete=delete, edit=edit, copy=copy,
             undoLastPoint=undoLastPoint, undo=undo,
             addPointToEdge=addPointToEdge, removePoint=removePoint,
+            classification = classification,
             createMode=createMode, editMode=editMode,
             createRectangleMode=createRectangleMode,
             createCircleMode=createCircleMode,
@@ -1725,3 +1745,38 @@ class MainWindow(QtWidgets.QMainWindow):
                     images.append(relativePath)
         images.sort(key=lambda x: x.lower())
         return images
+
+
+    def classification(self):
+
+        valid_transforms = transforms.Compose([transforms.Resize(256),
+                transforms.CenterCrop(224), 
+                transforms.ToTensor(), 
+                transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])])
+
+
+        with open('labelme/imagenet_classes.txt') as f:
+            class_names = [line.strip() for line in f.readlines()]
+
+        points = self.currentItem().shape().points
+        area = (int(points[0].x()), int(points[0].y()), int(points[1].x()), int(points[1].y()))
+
+        img = Image.open(self.filename)
+        
+        crop_img = img.crop(area)
+        b = io.BytesIO()
+        crop_img.save(b, format = "PNG")
+
+
+        img_bytes = b.getvalue()
+        img_t = valid_transforms(crop_img)
+        batch_t = torch.unsqueeze(img_t, 0)
+
+        resnet = models.resnet101(pretrained = True)
+        resnet.eval()
+        out = resnet(batch_t)
+        _, indices = torch.sort(out, descending = True)
+        percentage = torch.nn.functional.softmax(out, dim=1)[0] * 100
+        [print(class_names[idx], percentage[idx].item()) for idx in indices[0][:5]]
+
+        return
